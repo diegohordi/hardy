@@ -86,6 +86,9 @@ func (s *MessageService) PostMessage(ctx context.Context, message Message, statu
 }
 
 func TestClient_Integration_Try(t *testing.T) {
+	if testing.Short() {
+		t.Skipf("Skipping integration tests")
+	}
 	t.Parallel()
 
 	client, err := hardy.NewClient(

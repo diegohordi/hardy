@@ -21,7 +21,7 @@ jobs:
           go-version: 1.19
 
       - name: Unit tests
-        run: go test -race -v -coverprofile=coverage.txt -covermode=atomic
+        run: go test -race -short -v -coverprofile=coverage.txt -covermode=atomic
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v3
