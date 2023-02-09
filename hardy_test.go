@@ -3,10 +3,11 @@ package hardy_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/diegohordi/hardy"
+	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -19,9 +20,21 @@ func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+type BuggyReaderCloser struct {
+}
+
+func (b BuggyReaderCloser) Read(p []byte) (n int, err error) {
+	return 0, fmt.Errorf("some reading error")
+}
+
+func (b BuggyReaderCloser) Close() error {
+	return fmt.Errorf("some close error")
+}
+
 func TestClient_Try(t *testing.T) {
+	t.Parallel()
 	type fields struct {
-		Client func() *hardy.Client
+		Client func() (*hardy.Client, error)
 	}
 	type args struct {
 		ctx          func() (context.Context, context.CancelFunc)
@@ -30,15 +43,17 @@ func TestClient_Try(t *testing.T) {
 		fallbackFunc hardy.FallbackFunc
 	}
 	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		wantErr bool
+		name          string
+		fields        fields
+		args          args
+		wantClientErr bool
+		wantErr       bool
+		errWant       error
 	}{
 		{
 			name: "should perform the request successfully",
 			fields: fields{
-				Client: func() *hardy.Client {
+				Client: func() (*hardy.Client, error) {
 					httpClient := &http.Client{
 						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 							resp := httptest.NewRecorder()
@@ -46,10 +61,254 @@ func TestClient_Try(t *testing.T) {
 							return resp.Result(), nil
 						}),
 					}
-					client := hardy.NewClient(httpClient, log.Default()).
-						WithMaxRetries(4).
-						WithWaitInterval(1 * time.Millisecond)
-					return client
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugDisabled(),
+					)
+				},
+			},
+			args: args{
+				ctx: func() (context.Context, context.CancelFunc) {
+					return context.TODO(), nil
+				},
+				req: func() *http.Request {
+					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
+					return req
+				},
+				readerFunc: func(response *http.Response) error {
+					return nil
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "should perform the request successfully with debugger enabled",
+			fields: fields{
+				Client: func() (*hardy.Client, error) {
+					httpClient := &http.Client{
+						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+							resp := httptest.NewRecorder()
+							resp.WriteHeader(http.StatusOK)
+							return resp.Result(), nil
+						}),
+					}
+					var buf bytes.Buffer
+					logger := log.Default()
+					logger.SetOutput(&buf)
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugEnabled(logger),
+						hardy.WithDebugDisabled(),
+					)
+				},
+			},
+			args: args{
+				ctx: func() (context.Context, context.CancelFunc) {
+					return context.TODO(), nil
+				},
+				req: func() *http.Request {
+					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
+					return req
+				},
+				readerFunc: func(response *http.Response) error {
+					return nil
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "should perform the request successfully closing the response body from the given ReaderFunc",
+			fields: fields{
+				Client: func() (*hardy.Client, error) {
+					httpClient := &http.Client{
+						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+							resp := httptest.NewRecorder()
+							_, _ = resp.WriteString("test body")
+							resp.WriteHeader(http.StatusOK)
+							return resp.Result(), nil
+						}),
+					}
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugDisabled(),
+					)
+				},
+			},
+			args: args{
+				ctx: func() (context.Context, context.CancelFunc) {
+					return context.TODO(), nil
+				},
+				req: func() *http.Request {
+					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
+					return req
+				},
+				readerFunc: func(response *http.Response) error {
+					_, err := io.ReadAll(response.Body)
+					if err != nil {
+						return err
+					}
+					return response.Body.Close()
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "should perform the request successfully with some error occur while closing the response body",
+			fields: fields{
+				Client: func() (*hardy.Client, error) {
+					httpClient := &http.Client{
+						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+							resp := httptest.NewRecorder()
+							_, _ = resp.WriteString("test body")
+							resp.WriteHeader(http.StatusOK)
+							return resp.Result(), nil
+						}),
+					}
+
+					var buf bytes.Buffer
+					logger := log.Default()
+					logger.SetOutput(&buf)
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugEnabled(logger),
+					)
+				},
+			},
+			args: args{
+				ctx: func() (context.Context, context.CancelFunc) {
+					return context.TODO(), nil
+				},
+				req: func() *http.Request {
+					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
+					return req
+				},
+				readerFunc: func(response *http.Response) error {
+					buggyReader := BuggyReaderCloser{}
+					response.Body = buggyReader
+					return nil
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "should perform the request successfully with no client User-Agent header",
+			fields: fields{
+				Client: func() (*hardy.Client, error) {
+					httpClient := &http.Client{
+						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+							resp := httptest.NewRecorder()
+							resp.WriteHeader(http.StatusOK)
+							return resp.Result(), nil
+						}),
+					}
+					var buf bytes.Buffer
+					logger := log.Default()
+					logger.SetOutput(&buf)
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugEnabled(logger),
+						hardy.WithNoUserAgentHeader(),
+					)
+				},
+			},
+			args: args{
+				ctx: func() (context.Context, context.CancelFunc) {
+					return context.TODO(), nil
+				},
+				req: func() *http.Request {
+					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
+					return req
+				},
+				readerFunc: func(response *http.Response) error {
+					return nil
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "should perform the request successfully with custom User-Agent header",
+			fields: fields{
+				Client: func() (*hardy.Client, error) {
+					httpClient := &http.Client{
+						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+							resp := httptest.NewRecorder()
+							resp.WriteHeader(http.StatusOK)
+							return resp.Result(), nil
+						}),
+					}
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugDisabled(),
+						hardy.WithUserAgentHeader("my-own-user-agent-header"),
+					)
+				},
+			},
+			args: args{
+				ctx: func() (context.Context, context.CancelFunc) {
+					return context.TODO(), nil
+				},
+				req: func() *http.Request {
+					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
+					return req
+				},
+				readerFunc: func(response *http.Response) error {
+					return nil
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "should perform the request successfully with a custom backoff multiplier",
+			fields: fields{
+				Client: func() (*hardy.Client, error) {
+					httpClient := &http.Client{
+						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+							resp := httptest.NewRecorder()
+							resp.WriteHeader(http.StatusOK)
+							return resp.Result(), nil
+						}),
+					}
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugDisabled(),
+						hardy.WithBackoffMultiplier(3),
+						hardy.WithMaxRetries(4),
+						hardy.WithWaitInterval(1*time.Millisecond),
+					)
+				},
+			},
+			args: args{
+				ctx: func() (context.Context, context.CancelFunc) {
+					return context.TODO(), nil
+				},
+				req: func() *http.Request {
+					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
+					return req
+				},
+				readerFunc: func(response *http.Response) error {
+					return nil
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "should perform the request successfully with a not acceptable backoff multiplier given",
+			fields: fields{
+				Client: func() (*hardy.Client, error) {
+					httpClient := &http.Client{
+						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+							resp := httptest.NewRecorder()
+							resp.WriteHeader(http.StatusOK)
+							return resp.Result(), nil
+						}),
+					}
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugDisabled(),
+						hardy.WithBackoffMultiplier(1),
+						hardy.WithMaxRetries(4),
+						hardy.WithWaitInterval(1*time.Millisecond),
+					)
 				},
 			},
 			args: args{
@@ -69,16 +328,18 @@ func TestClient_Try(t *testing.T) {
 		{
 			name: "should try only one since the error got doesnt allow retries",
 			fields: fields{
-				Client: func() *hardy.Client {
+				Client: func() (*hardy.Client, error) {
 					httpClient := &http.Client{
 						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 							return nil, fmt.Errorf("not retriable error")
 						}),
 					}
-					client := hardy.NewClient(httpClient, log.Default()).
-						WithMaxRetries(4).
-						WithWaitInterval(1 * time.Millisecond)
-					return client
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugDisabled(),
+						hardy.WithMaxRetries(4),
+						hardy.WithWaitInterval(1*time.Millisecond),
+					)
 				},
 			},
 			args: args{
@@ -94,11 +355,12 @@ func TestClient_Try(t *testing.T) {
 				},
 			},
 			wantErr: true,
+			errWant: hardy.ErrUnexpected,
 		},
 		{
 			name: "should reach out four failure retries",
 			fields: fields{
-				Client: func() *hardy.Client {
+				Client: func() (*hardy.Client, error) {
 					httpClient := &http.Client{
 						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 							resp := httptest.NewRecorder()
@@ -106,10 +368,15 @@ func TestClient_Try(t *testing.T) {
 							return resp.Result(), nil
 						}),
 					}
-					client := hardy.NewClient(httpClient, log.Default()).
-						WithMaxRetries(4).
-						WithWaitInterval(1 * time.Millisecond)
-					return client
+					var buf bytes.Buffer
+					logger := log.Default()
+					logger.SetOutput(&buf)
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugEnabled(logger),
+						hardy.WithMaxRetries(4),
+						hardy.WithWaitInterval(1*time.Millisecond),
+					)
 				},
 			},
 			args: args{
@@ -128,11 +395,12 @@ func TestClient_Try(t *testing.T) {
 				},
 			},
 			wantErr: true,
+			errWant: hardy.ErrMaxRetriesReached,
 		},
 		{
 			name: "should reach out four failure retries and call the given fallback function",
 			fields: fields{
-				Client: func() *hardy.Client {
+				Client: func() (*hardy.Client, error) {
 					httpClient := &http.Client{
 						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 							resp := httptest.NewRecorder()
@@ -140,10 +408,12 @@ func TestClient_Try(t *testing.T) {
 							return resp.Result(), nil
 						}),
 					}
-					client := hardy.NewClient(httpClient, log.Default()).
-						WithMaxRetries(4).
-						WithWaitInterval(1 * time.Millisecond)
-					return client
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugDisabled(),
+						hardy.WithMaxRetries(4),
+						hardy.WithWaitInterval(1*time.Millisecond),
+					)
 				},
 			},
 			args: args{
@@ -161,15 +431,16 @@ func TestClient_Try(t *testing.T) {
 					return nil
 				},
 				fallbackFunc: func() error {
-					return fmt.Errorf("error from fallback function")
+					return hardy.ErrUnexpected
 				},
 			},
 			wantErr: true,
+			errWant: hardy.ErrUnexpected,
 		},
 		{
 			name: "should reach out four failure retries without max timeout",
 			fields: fields{
-				Client: func() *hardy.Client {
+				Client: func() (*hardy.Client, error) {
 					httpClient := &http.Client{
 						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 							resp := httptest.NewRecorder()
@@ -177,11 +448,13 @@ func TestClient_Try(t *testing.T) {
 							return resp.Result(), nil
 						}),
 					}
-					client := hardy.NewClient(httpClient, log.Default()).
-						WithMaxRetries(4).
-						WithWaitInterval(1 * time.Millisecond).
-						WithMaxInterval(0)
-					return client
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithMaxRetries(4),
+						hardy.WithDebugDisabled(),
+						hardy.WithWaitInterval(1*time.Millisecond),
+						hardy.WithMaxInterval(0),
+					)
 				},
 			},
 			args: args{
@@ -200,11 +473,12 @@ func TestClient_Try(t *testing.T) {
 				},
 			},
 			wantErr: true,
+			errWant: hardy.ErrMaxRetriesReached,
 		},
 		{
 			name: "should reach out four failure retries respecting the max timeout defined",
 			fields: fields{
-				Client: func() *hardy.Client {
+				Client: func() (*hardy.Client, error) {
 					httpClient := &http.Client{
 						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 							resp := httptest.NewRecorder()
@@ -212,11 +486,13 @@ func TestClient_Try(t *testing.T) {
 							return resp.Result(), nil
 						}),
 					}
-					client := hardy.NewClient(httpClient, log.Default()).
-						WithMaxRetries(4).
-						WithWaitInterval(3 * time.Millisecond).
-						WithMaxInterval(1 * time.Millisecond)
-					return client
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithMaxRetries(4),
+						hardy.WithDebugDisabled(),
+						hardy.WithWaitInterval(3*time.Millisecond),
+						hardy.WithMaxInterval(1*time.Millisecond),
+					)
 				},
 			},
 			args: args{
@@ -235,21 +511,24 @@ func TestClient_Try(t *testing.T) {
 				},
 			},
 			wantErr: true,
+			errWant: hardy.ErrMaxRetriesReached,
 		},
 		{
 			name: "should fail due to the try context deadline",
 			fields: fields{
-				Client: func() *hardy.Client {
+				Client: func() (*hardy.Client, error) {
 					httpClient := &http.Client{
 						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 							time.Sleep(10 * time.Second)
 							return &http.Response{}, nil
 						}),
 					}
-					client := hardy.NewClient(httpClient, log.Default()).
-						WithMaxRetries(4).
-						WithWaitInterval(10 * time.Second)
-					return client
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithMaxRetries(4),
+						hardy.WithDebugDisabled(),
+						hardy.WithWaitInterval(10*time.Second),
+					)
 				},
 			},
 			args: args{
@@ -265,21 +544,147 @@ func TestClient_Try(t *testing.T) {
 				},
 			},
 			wantErr: true,
+			errWant: context.DeadlineExceeded,
+		},
+		{
+			name: "should fail due to a nil http client given",
+			fields: fields{
+				Client: func() (*hardy.Client, error) {
+					return hardy.NewClient(
+						hardy.WithHttpClient(nil),
+					)
+				},
+			},
+			args: args{
+				ctx: func() (context.Context, context.CancelFunc) {
+					return context.WithTimeout(context.TODO(), 3*time.Millisecond)
+				},
+				req: func() *http.Request {
+					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
+					return req
+				},
+				readerFunc: func(response *http.Response) error {
+					return nil
+				},
+			},
+			wantClientErr: true,
+			errWant:       hardy.ErrInvalidClientConfiguration,
+		},
+		{
+			name: "should fail due to a nil debugger given",
+			fields: fields{
+				Client: func() (*hardy.Client, error) {
+					return hardy.NewClient(
+						hardy.WithDebugEnabled(nil),
+					)
+				},
+			},
+			args: args{
+				ctx: func() (context.Context, context.CancelFunc) {
+					return context.WithTimeout(context.TODO(), 3*time.Millisecond)
+				},
+				req: func() *http.Request {
+					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
+					return req
+				},
+				readerFunc: func(response *http.Response) error {
+					return nil
+				},
+			},
+			wantClientErr: true,
+			errWant:       hardy.ErrInvalidClientConfiguration,
+		},
+		{
+			name: "should fail due to a invalid request body while debugging the request",
+			fields: fields{
+				Client: func() (*hardy.Client, error) {
+					httpClient := &http.Client{
+						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+							resp := httptest.NewRecorder()
+							resp.WriteHeader(http.StatusOK)
+							return resp.Result(), nil
+						}),
+					}
+
+					var buf bytes.Buffer
+					logger := log.Default()
+					logger.SetOutput(&buf)
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugEnabled(logger),
+					)
+				},
+			},
+			args: args{
+				ctx: func() (context.Context, context.CancelFunc) {
+					return context.TODO(), nil
+				},
+				req: func() *http.Request {
+					buggyReader := BuggyReaderCloser{}
+					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", buggyReader)
+					return req
+				},
+				readerFunc: func(response *http.Response) error {
+					buggyReader := BuggyReaderCloser{}
+					response.Body = buggyReader
+					return nil
+				},
+			},
+			wantErr: true,
+			errWant: hardy.ErrUnexpected,
+		},
+		{
+			name: "should fail due to a invalid request body while cloning the request",
+			fields: fields{
+				Client: func() (*hardy.Client, error) {
+					httpClient := &http.Client{
+						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+							resp := httptest.NewRecorder()
+							resp.WriteHeader(http.StatusOK)
+							return resp.Result(), nil
+						}),
+					}
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugDisabled(),
+					)
+				},
+			},
+			args: args{
+				ctx: func() (context.Context, context.CancelFunc) {
+					return context.TODO(), nil
+				},
+				req: func() *http.Request {
+					buggyReader := BuggyReaderCloser{}
+					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", buggyReader)
+					req.GetBody = func() (io.ReadCloser, error) {
+						return req.Body, hardy.ErrUnexpected
+					}
+					return req
+				},
+				readerFunc: func(response *http.Response) error {
+					return nil
+				},
+			},
+			wantErr: true,
+			errWant: hardy.ErrUnexpected,
 		},
 		{
 			name: "should fail due to the empty reader func given",
 			fields: fields{
-				Client: func() *hardy.Client {
+				Client: func() (*hardy.Client, error) {
 					httpClient := &http.Client{
 						Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 							time.Sleep(10 * time.Second)
 							return &http.Response{}, nil
 						}),
 					}
-					client := hardy.NewClient(httpClient, log.Default()).
-						WithMaxRetries(4).
-						WithWaitInterval(10 * time.Second)
-					return client
+					return hardy.NewClient(
+						hardy.WithHttpClient(httpClient),
+						hardy.WithDebugDisabled(),
+						hardy.WithMaxRetries(4),
+						hardy.WithWaitInterval(10*time.Second),
+					)
 				},
 			},
 			args: args{
@@ -293,193 +698,40 @@ func TestClient_Try(t *testing.T) {
 				readerFunc: nil,
 			},
 			wantErr: true,
-		},
-		{
-			name: "should fail due to the empty http client given",
-			fields: fields{
-				Client: func() *hardy.Client {
-					client := hardy.NewClient(nil, log.Default()).
-						WithMaxRetries(4).
-						WithWaitInterval(10 * time.Second)
-					return client
-				},
-			},
-			args: args{
-				ctx: func() (context.Context, context.CancelFunc) {
-					return context.WithTimeout(context.TODO(), 3*time.Millisecond)
-				},
-				req: func() *http.Request {
-					req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
-					return req
-				},
-				readerFunc: nil,
-			},
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-			client := tt.fields.Client()
-			ctx, cancelFunc := tt.args.ctx()
-			if cancelFunc != nil {
-				defer cancelFunc()
-			}
-			if err := client.Try(ctx, tt.args.req(), tt.args.readerFunc, tt.args.fallbackFunc); (err != nil) != tt.wantErr {
-				t.Errorf("Try() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-type TestService struct {
-	Client *hardy.Client
-}
-
-func (s *TestService) GetHelloMessage(ctx context.Context, name string) (string, error) {
-	if s.Client == nil {
-		return "", fmt.Errorf("no client was given")
-	}
-	var helloMessage string
-	request, err := http.NewRequest(http.MethodGet, "https://httpbin.org/status/500,200,300", nil)
-	if err != nil {
-		return "", err
-	}
-	readerFunc := func(receiver *string) hardy.ReaderFunc {
-		return func(response *http.Response) error {
-			if response.StatusCode == http.StatusOK {
-				*receiver = fmt.Sprintf("hello from reader, %s!", name)
-				return nil
-			}
-			return fmt.Errorf(response.Status)
-		}
-	}
-	fallbackFunc := func(receiver *string) hardy.FallbackFunc {
-		return func() error {
-			*receiver = fmt.Sprintf("hello from fallback, %s!", name)
-			return nil
-		}
-	}
-	err = s.Client.Try(ctx, request, readerFunc(&helloMessage), fallbackFunc(&helloMessage))
-	if err != nil {
-		return "", err
-	}
-	return helloMessage, nil
-}
-
-func TestClient_TryParallel(t *testing.T) {
-
-	httpClient := &http.Client{Timeout: 3 * time.Second}
-	client := hardy.NewClient(httpClient, nil).
-		WithMaxRetries(4).
-		WithWaitInterval(3 * time.Millisecond).
-		WithMultiplier(hardy.DefaultMultiplier).
-		WithMaxInterval(3 * time.Second)
-	testService := &TestService{Client: client}
-
-	type args struct {
-		ctx  func() (context.Context, context.CancelFunc)
-		name string
-	}
-	tests := []struct {
-		name string
-		args args
-	}{
-		{
-			name: "should say hello to John",
-			args: args{
-				ctx: func() (context.Context, context.CancelFunc) {
-					return context.TODO(), nil
-				},
-				name: "John",
-			},
-		},
-		{
-			name: "should say hello to Doe",
-			args: args{
-				ctx: func() (context.Context, context.CancelFunc) {
-					return context.TODO(), nil
-				},
-				name: "Doe",
-			},
-		},
-		{
-			name: "should say hello to John Doe",
-			args: args{
-				ctx: func() (context.Context, context.CancelFunc) {
-					return context.TODO(), nil
-				},
-				name: "John Doe",
-			},
+			errWant: hardy.ErrNoReaderFuncFound,
 		},
 	}
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+
+			// Create the client
+			client, err := tt.fields.Client()
+			if err != nil != tt.wantClientErr {
+				t.Errorf("Client() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantClientErr && !errors.Is(err, tt.errWant) {
+				t.Errorf("Client() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil && errors.Is(err, tt.errWant) {
+				return
+			}
+
+			// Create the context
 			ctx, cancelFunc := tt.args.ctx()
 			if cancelFunc != nil {
 				defer cancelFunc()
 			}
-			msg, err := testService.GetHelloMessage(ctx, tt.args.name)
-			if err != nil {
-				t.Logf("GetHelloMessage() error = %v\n", err)
-			} else {
-				t.Logf("GetHelloMessage() message = %s\n", msg)
-			}
 
+			// Call try
+			err = client.Try(ctx, tt.args.req(), tt.args.readerFunc, tt.args.fallbackFunc)
+			if err != nil != tt.wantErr {
+				t.Errorf("Try() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && !errors.Is(err, tt.errWant) {
+				t.Errorf("Try() error = %v, wantErr %v", err, tt.wantErr)
+			}
 		})
-	}
-}
-
-func BenchmarkClient_TryWithNoRetries(b *testing.B) {
-	httpClient := &http.Client{
-		Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
-			resp := httptest.NewRecorder()
-			resp.WriteHeader(http.StatusOK)
-			return resp.Result(), nil
-		}),
-	}
-	client := hardy.NewClient(httpClient, log.Default()).
-		WithMaxRetries(4).
-		WithWaitInterval(1 * time.Millisecond)
-
-	readerFunc := func(response *http.Response) error {
-		return nil
-	}
-	for n := 0; n < b.N; n++ {
-		req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
-		err := client.Try(context.TODO(), req, readerFunc, nil)
-		if err != nil {
-			b.Error(err)
-		}
-	}
-}
-func BenchmarkClient_TryWithRandomRetries(b *testing.B) {
-	httpClient := &http.Client{
-		Transport: RoundTripFunc(func(req *http.Request) (*http.Response, error) {
-			resp := httptest.NewRecorder()
-			resp.WriteHeader(http.StatusOK)
-			return resp.Result(), nil
-		}),
-	}
-	client := hardy.NewClient(httpClient, nil).
-		WithMaxRetries(4).
-		WithWaitInterval(1 * time.Millisecond).
-		WithMaxInterval(1 * time.Millisecond)
-
-	readerFunc := func(execution int) func(response *http.Response) error {
-		return func(response *http.Response) error {
-			random := rand.Intn(4)
-			if random%2 == 0 {
-				return fmt.Errorf("retry")
-			}
-			return nil
-		}
-	}
-	for n := 0; n < b.N; n++ {
-		req, _ := http.NewRequest(http.MethodPost, "http://localhost:80", bytes.NewReader(nil))
-		_ = client.Try(context.TODO(), req, readerFunc(n), nil)
 	}
 }

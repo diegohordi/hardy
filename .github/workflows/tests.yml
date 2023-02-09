@@ -3,7 +3,7 @@ name: Tests
 on:
   push:
     branches:
-      - master
+      - **
   pull_request:
     branches:
       - master
@@ -18,7 +18,10 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v2
         with:
-          go-version: 1.17
+          go-version: 1.19
 
       - name: Test
-        run: go test -v -race -count=1 -cover ./...
+        run: go test -race -coverprofile=coverage.txt -covermode=atomic
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v3

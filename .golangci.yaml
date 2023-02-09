@@ -1,0 +1,6 @@
+linters:
+  disable:
+
+output:
+  format: colored-line-number
+  unique-by-line: true
