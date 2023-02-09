@@ -28,4 +28,4 @@ jobs:
 
       - name: Integration tests with HTTP BIN
         run: |
-          docker-compose -f ./deployments/docker-compose.yml -p up --build --exit-code-from
+          docker-compose -f ./deployments/docker-compose.yml up
