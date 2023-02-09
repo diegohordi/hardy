@@ -11,5 +11,5 @@ services:
     environment:
       - HTTBIN_API=http://httpbin:80
     build:
-      context: ..
+      context: ./
       dockerfile: './build/Dockerfile'
