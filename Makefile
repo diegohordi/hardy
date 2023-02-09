@@ -1,11 +1,19 @@
 format:
-	docker run --rm -v $(shell pwd):/data cytopia/gofmt -l -w .
+	docker run -v $(shell pwd):/data cytopia/gofmt -l -w .
 
-lint:
-	docker run --rm -v $(shell pwd):/app -w /app golangci/golangci-lint:v1.42.1 golangci-lint run -v ./...
+mod:
+	go mod tidy
+	go mod vendor
 
-test:
-	docker run --rm -v $(shell pwd):/app -w /app golang:1.17 go test -count=1 -v -race -cover ./...
+lint: mod
+	docker run -v $(shell pwd):/app -w /app golangci/golangci-lint:latest golangci-lint run -v ./...
 
-benchmark:
-	docker run --rm -v $(shell pwd):/app -w /app golang:1.17 go test -count=1 -bench=. -run=$Benchmark -benchmem -memprofile mem.prof -cpuprofile cpu.prof
+start_dev_env:
+	docker-compose up -d
+
+tests:
+	go test -short -count=1 ./... -race -cover -v -coverprofile cover.out
+	go tool cover -func cover.out
+
+integration_tests:
+	docker-compose up --exit-code-from integration-tests

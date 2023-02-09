@@ -3,7 +3,7 @@ name: Tests
 on:
   push:
     branches:
-      - master
+      - '**'
   pull_request:
     branches:
       - master
@@ -13,12 +13,19 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v3
         with:
-          go-version: 1.17
+          go-version: 1.19
 
-      - name: Test
-        run: go test -v -race -count=1 -cover ./...
+      - name: Unit tests
+        run: go test -race -short -v -coverprofile=coverage.txt -covermode=atomic
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v3
+
+      - name: Integration tests with HTTP BIN
+        run: |
+          docker-compose up --exit-code-from integration-tests

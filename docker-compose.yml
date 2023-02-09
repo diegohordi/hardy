@@ -1,0 +1,16 @@
+version: '2'
+services:
+  httpbin:
+    image: kennethreitz/httpbin
+    ports:
+      - "80:80"
+
+  integration-tests:
+    container_name: integration-tests
+    depends_on:
+      - httpbin
+    environment:
+      - HTTBIN_API=http://httpbin:80
+    build:
+      context: .
+      dockerfile: './Dockerfile'
