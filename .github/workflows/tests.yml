@@ -28,4 +28,4 @@ jobs:
 
       - name: Integration tests with HTTP BIN
         run: |
-          docker-compose up
+          docker-compose up --exit-code-from integration-tests

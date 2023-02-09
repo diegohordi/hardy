@@ -9,11 +9,14 @@ lint: mod
 	docker run -v $(shell pwd):/app -w /app golangci/golangci-lint:latest golangci-lint run -v ./...
 
 start_dev_env:
-	docker-compose -f ./deployments/docker-compose.yml up -d
+	docker-compose up -d
 
-test: start_dev_env
-	go test -count=1 ./... -race -cover -v -coverprofile cover.out
+test:
+	go test -short -count=1 ./... -race -cover -v -coverprofile cover.out
 	go tool cover -func cover.out
+
+integration_test:
+	docker-compose up --exit-code-from integration-tests
 
 benchmark:
 	go test -count=1 -bench=. -run=$Benchmark -benchmem -memprofile mem.prof -cpuprofile cpu.prof

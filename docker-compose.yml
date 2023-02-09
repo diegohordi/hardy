@@ -6,6 +6,7 @@ services:
       - "80:80"
 
   integration-tests:
+    container_name: integration-tests
     depends_on:
       - httpbin
     environment:
