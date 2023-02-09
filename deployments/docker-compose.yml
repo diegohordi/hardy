@@ -12,4 +12,4 @@ services:
       - HTTBIN_API=http://httpbin:80
     build:
       context: ..
-      dockerfile: 'build/client/Dockerfile'
+      dockerfile: './build/Dockerfile'
