@@ -14,8 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-        with:
-          path: "hardy"
 
       - name: Setup Go
         uses: actions/setup-go@v3
@@ -30,4 +28,4 @@ jobs:
 
       - name: Integration tests with HTTP BIN
         run: |
-          docker-compose -f ./hardy/deployments/docker-compose.yml -p up --build --exit-code-from
+          docker-compose -f ./deployments/docker-compose.yml -p up --build --exit-code-from
