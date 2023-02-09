@@ -11,12 +11,9 @@ lint: mod
 start_dev_env:
 	docker-compose up -d
 
-test:
+tests:
 	go test -short -count=1 ./... -race -cover -v -coverprofile cover.out
 	go tool cover -func cover.out
 
-integration_test:
+integration_tests:
 	docker-compose up --exit-code-from integration-tests
-
-benchmark:
-	go test -count=1 -bench=. -run=$Benchmark -benchmem -memprofile mem.prof -cpuprofile cpu.prof

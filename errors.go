@@ -81,10 +81,3 @@ func withCause(cause error) errorOption {
 		}
 	}
 }
-
-// withHTTPStatusCode sets the equivalent HTTP status code of the error.
-func withHTTPStatusCode(statusCode int) errorOption {
-	return func(err *Error) {
-		err.HTTPStatusCode = statusCode
-	}
-}

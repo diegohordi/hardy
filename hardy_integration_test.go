@@ -64,7 +64,7 @@ func (s *MessageService) PostMessage(ctx context.Context, message Message, statu
 
 	// Create a fallback function with the API doesn't respond properly
 	fallbackFunc := func() error {
-		helloMessage = fmt.Sprintf("Hello from fallback!")
+		helloMessage = "Hello from fallback!"
 		return nil
 	}
 

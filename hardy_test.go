@@ -97,7 +97,7 @@ func TestClient_Try(t *testing.T) {
 					logger.SetOutput(&buf)
 					return hardy.NewClient(
 						hardy.WithHttpClient(httpClient),
-						hardy.WithDebugEnabled(logger),
+						hardy.WithDebugger(logger),
 						hardy.WithDebugDisabled(),
 					)
 				},
@@ -170,7 +170,7 @@ func TestClient_Try(t *testing.T) {
 					logger.SetOutput(&buf)
 					return hardy.NewClient(
 						hardy.WithHttpClient(httpClient),
-						hardy.WithDebugEnabled(logger),
+						hardy.WithDebugger(logger),
 					)
 				},
 			},
@@ -206,7 +206,7 @@ func TestClient_Try(t *testing.T) {
 					logger.SetOutput(&buf)
 					return hardy.NewClient(
 						hardy.WithHttpClient(httpClient),
-						hardy.WithDebugEnabled(logger),
+						hardy.WithDebugger(logger),
 						hardy.WithNoUserAgentHeader(),
 					)
 				},
@@ -373,7 +373,7 @@ func TestClient_Try(t *testing.T) {
 					logger.SetOutput(&buf)
 					return hardy.NewClient(
 						hardy.WithHttpClient(httpClient),
-						hardy.WithDebugEnabled(logger),
+						hardy.WithDebugger(logger),
 						hardy.WithMaxRetries(4),
 						hardy.WithWaitInterval(1*time.Millisecond),
 					)
@@ -575,7 +575,7 @@ func TestClient_Try(t *testing.T) {
 			fields: fields{
 				Client: func() (*hardy.Client, error) {
 					return hardy.NewClient(
-						hardy.WithDebugEnabled(nil),
+						hardy.WithDebugger(nil),
 					)
 				},
 			},
@@ -611,7 +611,7 @@ func TestClient_Try(t *testing.T) {
 					logger.SetOutput(&buf)
 					return hardy.NewClient(
 						hardy.WithHttpClient(httpClient),
-						hardy.WithDebugEnabled(logger),
+						hardy.WithDebugger(logger),
 					)
 				},
 			},

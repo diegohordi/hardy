@@ -4,11 +4,12 @@ package hardy
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"log"
 	"math"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"net/http/httputil"
 	"runtime"
@@ -124,8 +125,8 @@ func NewClient(options ...Option) (*Client, error) {
 // Option defines the optional configurations for the Client.
 type Option func(c *Client) error
 
-// WithDebugEnabled enables the debug mode, dumping the requests to output using the client logger.
-func WithDebugEnabled(debugger Debugger) Option {
+// WithDebugger enables the debug mode, dumping the requests to output using the client logger.
+func WithDebugger(debugger Debugger) Option {
 	return func(c *Client) error {
 		if debugger == nil {
 			return ErrNoDebuggerFound
@@ -217,10 +218,12 @@ func (c *Client) setUserAgentHeader() {
 
 // getInterval calculates the interval between each retry based on the given attempt and the client configuration.
 func (c *Client) getInterval(waitInterval, maxInterval time.Duration, attempt int, multiplier float64) time.Duration {
-	rand.Seed(time.Now().UnixNano())
 	backoff := waitInterval.Milliseconds() * int64(math.Pow(multiplier, float64(attempt)))
-	random := int64(rand.Intn(1000))
-	totalInterval := time.Duration(backoff+random) * time.Millisecond
+	random, err := rand.Int(rand.Reader, big.NewInt(1000))
+	if err != nil {
+		return time.Duration(backoff) * time.Millisecond
+	}
+	totalInterval := time.Duration(backoff+random.Int64()) * time.Millisecond
 	if maxInterval == 0 {
 		return totalInterval
 	}
