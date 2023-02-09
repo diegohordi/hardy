@@ -1,3 +1,5 @@
+[![codecov](https://codecov.io/gh/diegohordi/hardy/branch/master/graph/badge.svg?token=2BPZ9TX105)](https://codecov.io/gh/diegohordi/hardy)
+
 # Hardy
 
 Hardy is a very simple wrapper around http.Client that enables you to 
